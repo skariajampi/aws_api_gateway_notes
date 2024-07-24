@@ -1,0 +1,111 @@
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import com.networknt.schema.uri.URIFetcher;
+import com.networknt.schema.uri.URIFetchersRegistry;
+import com.networknt.schema.uri.URISchemeFactory;
+import com.networknt.schema.uri.URISchemeFactory.URIFactory;
+import com.networknt.schema.uri.URISchemeHandlersRegistry;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
+
+public class CustomJsonSchemaLoader {
+
+    private final Map<String, JsonSchema> schemaCache = new HashMap<>();
+    private final JsonSchemaFactory schemaFactory;
+
+    public CustomJsonSchemaLoader() {
+        URISchemeHandlersRegistry handlersRegistry = URISchemeHandlersRegistry.getInstance();
+        handlersRegistry.register(new FileURISchemeFactory());
+
+        schemaFactory = JsonSchemaFactory.builder(JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7))
+                .objectMapper(new com.fasterxml.jackson.databind.ObjectMapper())
+                .uriHandlersRegistry(handlersRegistry)
+                .build();
+    }
+
+    public JsonSchema loadSchema(String schemaPath) throws IOException {
+        File schemaFile = new File(schemaPath);
+        String schemaFileName = schemaFile.getName();
+
+        if (schemaCache.containsKey(schemaFileName)) {
+            return schemaCache.get(schemaFileName);
+        }
+
+        JsonSchema schema = schemaFactory.getSchema(Files.newBufferedReader(Paths.get(schemaPath)));
+        schemaCache.put(schemaFileName, schema);
+
+        return schema;
+    }
+
+    static class FileURISchemeFactory implements URISchemeFactory {
+        @Override
+        public URIFactory create() {
+            return new FileURIFactory();
+        }
+    }
+
+    static class FileURIFactory implements URIFactory {
+        @Override
+        public URIFetcher createFetcher() {
+            return new FileURIFetcher();
+        }
+    }
+
+    static class FileURIFetcher implements URIFetcher {
+        @Override
+        public byte[] fetch(String uri) throws IOException {
+            return Files.readAllBytes(Paths.get(uri));
+        }
+    }
+}
+---------------------------------------------------
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.ValidationMessage;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+public class JsonSchemaValidationTest {
+
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final CustomJsonSchemaLoader schemaLoader = new CustomJsonSchemaLoader();
+
+    @Test
+    public void testValidJson() throws IOException {
+        // Load the primary schema
+        JsonSchema schema = schemaLoader.loadSchema("src/test/resources/schema1.json");
+
+        // Sample JSON to validate
+        String json = "{\"prop1\": \"This is a test\"}";
+        JsonNode jsonNode = mapper.readTree(json);
+
+        // Validate JSON
+        Set<ValidationMessage> errors = schema.validate(jsonNode);
+        assertTrue(errors.isEmpty(), "JSON should be valid, but found errors: " + errors);
+    }
+
+    @Test
+    public void testInvalidJson() throws IOException {
+        // Load the primary schema
+        JsonSchema schema = schemaLoader.loadSchema("src/test/resources/schema1.json");
+
+        // Sample invalid JSON to validate
+        String json = "{\"prop1\": 123}";
+        JsonNode jsonNode = mapper.readTree(json);
+
+        // Validate JSON
+        Set<ValidationMessage> errors = schema.validate(jsonNode);
+        assertTrue(!errors.isEmpty(), "JSON should be invalid, but found no errors");
+    }
+}
